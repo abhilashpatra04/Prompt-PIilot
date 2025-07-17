@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "702596055723",
+    "project_id": "chatbot-53ecb",
+    "storage_bucket": "chatbot-53ecb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:702596055723:android:8f8787c51d944087042dee",
+        "android_client_info": {
+          "package_name": "com.chatgptlite.wanted"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA1i-mT91ja6Bi7gcMKoV1YhAHHlW3TaI8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:702596055723:android:c23360733358847d042dee",
+        "android_client_info": {
+          "package_name": "com.example.promptpilot"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA1i-mT91ja6Bi7gcMKoV1YhAHHlW3TaI8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
