@@ -1,22 +1,28 @@
 package com.example.promptpilot.screens
 
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -25,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,39 +45,77 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.rememberAsyncImagePainter
-import com.example.promptpilot.helpers.uploadImageToFirebase
-import com.example.promptpilot.ui.theme.MainTheme
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.promptpilot.data.remote.ChatImage
+import com.example.promptpilot.helpers.uploadImageToCloudinary
+import com.example.promptpilot.models.AttachmentType
+import com.example.promptpilot.models.ChatAttachment
+import com.example.promptpilot.viewmodels.ConversationViewModel
 import kotlinx.coroutines.launch
 
 // The modern input box composable
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModernTextInput(
-    onSend: (String, Uri?) -> Unit
+    onSend: (String, List<ChatAttachment>) -> Unit,
+    supportsImage: Boolean,
+    conversationViewModel: ConversationViewModel = hiltViewModel()
 ) {
-    MainTheme {
+    val pendingAttachments by conversationViewModel.pendingAttachments.collectAsState()
         var text by remember { mutableStateOf(TextFieldValue("")) }
-        var imageUri by remember { mutableStateOf<Uri?>(null) }
-        // Image picker launcher
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
         val launcher = rememberLauncherForActivityResult(
-            contract = ActivityResultContracts.GetContent()
-        ) { uri: Uri? ->
-            imageUri = uri
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        uris.forEach { uri ->
+            scope.launch {
+                val url = uploadImageToCloudinary(context, uri)
+                if (url != null) {
+                    conversationViewModel.addAttachment(ChatAttachment(
+                        name = uri.lastPathSegment ?: "image",
+                        url = url,
+                        type = AttachmentType.IMAGE
+                    ))
+                }
+            }
         }
-        val scope = rememberCoroutineScope()
+    }
+    val pdfLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        uris.forEach { uri ->
+            scope.launch {
+                conversationViewModel.addAttachment(ChatAttachment(
+                    name = uri.lastPathSegment ?: "pdf",
+                    url = uri.toString(),
+                    type = AttachmentType.PDF
+                ))
+            }
+        }
+    }
+    var expanded by remember { mutableStateOf(false) }
+
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(topEnd = 16.dp, topStart = 16.dp))
                 .background(Color.DarkGray)
-                .fillMaxWidth() // Make sure the Box fills the width
+            .fillMaxWidth()
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp, bottom = 8.dp)
-            ) {
-                // First row: Text field
+                .clip(RoundedCornerShape(topEnd = 16.dp, topStart = 16.dp))
+                .background(Color.DarkGray)
+        ) {
+            // 1. Image chips row (if any images)
+            AttachmentChipsRow(
+                attachments = pendingAttachments,
+                onRemove = { conversationViewModel.removeAttachment(it) },
+                onClick = { /* set zoomedAttachment = it, see Step 4 */ }
+            )
+
+            // 2. Text input row
                 TextField(
                     value = text,
                     onValueChange = { text = it },
@@ -88,33 +133,66 @@ fun ModernTextInput(
                         unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     ),
                     modifier = Modifier
-                        .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
                     minLines = 1,
                     maxLines = 6,
                     singleLine = false,
                 )
-                // Second row: Tool icons
+
+            // 3. Bottom row: image picker and send button
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = { launcher.launch("image/*") }) {
-                        Icon(
-                            imageVector = Icons.Default.Image,
-                            contentDescription = "Add Image",
-                            tint = Color.White
-                        )
+                    if (supportsImage) {
+                        IconButton(onClick = { launcher.launch("image/*") }) {
+                            Icon(
+                                imageVector = Icons.Default.Image,
+                                contentDescription = "Add Image",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(onClick = { pdfLauncher.launch("application/pdf") }) {
+                            Icon(
+                                imageVector = Icons.Default.PictureAsPdf,
+                                contentDescription = "Add PDF",
+                                tint = Color.White
+                            )
+                        }
+
+                    } else {
+                        IconButton(onClick = {}) {
+                            Icon(
+                                imageVector = Icons.Default.Image,
+                                contentDescription = "Add Image",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(onClick = {}) {
+                            Icon(
+                                imageVector = Icons.Default.PictureAsPdf,
+                                contentDescription = "Add PDF",
+                                tint = Color.White
+                            )
+                        }
                     }
+                    Spacer(modifier = Modifier.weight(1f))
                     IconButton(
                         onClick = {
-                            if (text.text.isNotEmpty() || imageUri != null) {
-                                // Launch a coroutine to upload image and send message
+                        if (text.text.isNotEmpty() || pendingAttachments.any { it.type == AttachmentType.IMAGE || it.type == AttachmentType.PDF }) {
                                 scope.launch {
-                                    val imageUrl = imageUri?.let { uploadImageToFirebase(it) }
-                                    onSend(text.text.trim(), imageUri)
-                                    text = TextFieldValue("")
-                                    imageUri = null
+                                    try {
+                                    val contextAttachments = pendingAttachments.filter { it.type == AttachmentType.IMAGE || it.type == AttachmentType.PDF }
+                                    Log.d("PromptPilot", "Sending attachments: ${contextAttachments.map { it.url }}")
+                                    conversationViewModel.sendMessage(text.text.trim(), pendingAttachments, context)
+                                    conversationViewModel.clearPendingAttachments()
+                                        text = TextFieldValue("")
+                                    } catch (e: Exception) {
+                                        Log.e("AttachmentUpload", "Error uploading attachment or sending message", e)
+                                    }
                                 }
                             }
                         }
@@ -142,14 +220,99 @@ fun ModernTextInput(
                 }
             }
         }
-        imageUri?.let {
-            Image(
-                painter = rememberAsyncImagePainter(it),
-                contentDescription = "Selected Image",
+}
+
+@Composable
+fun ImageContextChips(
+    images: List<ChatImage>,
+    onToggleContext: (ChatImage) -> Unit,
+    expanded: Boolean,
+    onExpandToggle: () -> Unit
+) {
+    val maxVisible = 1 // Increase if you want to show more chips by default
+    val visibleImages = if (expanded) images else images.take(maxVisible)
+    var images by remember { mutableStateOf(listOf<ChatImage>()) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        images.forEach { image ->
+            Box(
                 modifier = Modifier
-                    .size(80.dp)
-                    .padding(8.dp)
-            )
+                    .padding(end = 4.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (image.useAsContext) Color.DarkGray else Color.Black)
+                    .border(1.dp, Color.White, RoundedCornerShape(16.dp))
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "@${image.name}",
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        fontSize = 14.sp
+                    )
+                    IconButton(
+                        onClick = {
+                            images = images.filter { it != image }
+                        },
+                        modifier = Modifier.size(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Remove Image",
+                            tint = Color.Red,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+@Composable
+fun AttachmentChipsRow(
+    attachments: List<ChatAttachment>,
+    onRemove: (ChatAttachment) -> Unit,
+    onClick: (ChatAttachment) -> Unit
+) {
+    LazyRow {
+        items(attachments) { attachment ->
+            Box(
+                modifier = Modifier
+                    .padding(end = 4.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.DarkGray)
+                    .border(1.dp, Color.White, RoundedCornerShape(16.dp))
+                    .clickable { onClick(attachment) }
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (attachment.type == AttachmentType.IMAGE) Icons.Default.Image else Icons.Default.PictureAsPdf,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "@${attachment.name}",
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        fontSize = 14.sp
+                    )
+                    IconButton(
+                        onClick = { onRemove(attachment) },
+                        modifier = Modifier.size(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Remove",
+                            tint = Color.Red,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }

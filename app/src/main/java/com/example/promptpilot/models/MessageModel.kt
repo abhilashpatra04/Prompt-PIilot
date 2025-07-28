@@ -2,13 +2,27 @@ package com.example.promptpilot.models
 
 import java.util.*
 
+enum class AttachmentType { IMAGE, PDF }
+
+data class ChatAttachment(
+    val name: String = "",
+    val url: String = "",
+    val type: AttachmentType = AttachmentType.IMAGE,
+    val useAsContext: Boolean = true
+)
+
 data class MessageModel (
-    var id: String = Date().time.toString(),
+    var id: String = "",
     var conversationId: String = "",
     var question: String = "",
     var answer: String = "",
     var createdAt: Date = Date(),
-    var imageUri: String? = null
+    var imageUrl: String? = null,
+    val text: String = "",
+    val sender: SenderType = SenderType.USER,
+    val timestamp: Long = 0L,
+    val model: String? = null,
+    val attachments: List<ChatAttachment> = emptyList()
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

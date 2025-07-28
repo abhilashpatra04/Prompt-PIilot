@@ -11,6 +11,6 @@ interface OpenAIRepository {
         model: String,
         chatId: String? = null,
         title: String = "Untitled",
-        imageUri: String? = null
+        image_urls: List<String>? = null
     ): String
 }

@@ -38,6 +38,9 @@ activityCompose = "1.10.1"
 composeUiVersion = "1.8.3"
 androidxUiViewbinding = "8.2.0"
 androidGradlePlugin = "8.13"
+coreAnimationVersion = "1.0.0"
+roomCommonJvmVersion = "2.7.2"
+roomRuntimeAndroidVersion = "2.7.2"
 
 [libraries]
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui", version.ref = "composeUiVersion" }
@@ -96,6 +99,9 @@ google-firebase-firestore-ktx = { group = "com.google.firebase", name = "firebas
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-core-animation = { group = "androidx.core", name = "core-animation", version.ref = "coreAnimationVersion" }
+androidx-room-common-jvm = { group = "androidx.room", name = "room-common-jvm", version.ref = "roomCommonJvmVersion" }
+androidx-room-runtime-android = { group = "androidx.room", name = "room-runtime-android", version.ref = "roomRuntimeAndroidVersion" }
 #androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview", version.ref = "composeUi" }
 
 

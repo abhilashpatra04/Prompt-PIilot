@@ -80,8 +80,7 @@ fun ModernScaffold(
                         color = Color.Black
                     ) {
                         ModernConversation(
-                            conversationViewModel = conversationViewModel,
-                            onMenuClick = { /* Not needed here, handled above */ }
+                            conversationViewModel = conversationViewModel
                         )
                     }
                 }

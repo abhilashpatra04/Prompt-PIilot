@@ -37,8 +37,8 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 //    kotlinOptions {
 //        jvmTarget = "11"
@@ -47,12 +47,15 @@ android {
         compose = true
     }
     kotlin {
-        jvmToolchain(11)
+        jvmToolchain(17)
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "2.2.0"
     }
-//    packaging{
+    kotlinOptions {
+        freeCompilerArgs = listOf("-XXLanguage:+PropertyParamAnnotationDefaultTargetMode")
+    }
+    //    packaging{
 //        resources {
 //            excludes += "/META-INF/{AL2.0,LGPL2.1}"
 //        }
@@ -90,7 +93,11 @@ dependencies {
     implementation("com.google.firebase:firebase-storage-ktx:21.0.2")
     // Hilt (Dependency Injection)
     implementation("com.google.dagger:hilt-android:2.56.2")
+    implementation(libs.androidx.core.animation)
+    implementation(libs.androidx.room.common.jvm)
+    implementation(libs.androidx.room.runtime.android)
     kapt("com.google.dagger:hilt-compiler:2.56.2")
+    kapt("androidx.room:room-compiler:2.7.2")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
     // Kotlinx
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")

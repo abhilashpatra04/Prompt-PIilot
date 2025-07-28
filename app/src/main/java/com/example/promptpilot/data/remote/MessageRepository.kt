@@ -5,8 +5,9 @@ import kotlinx.coroutines.flow.Flow
 
 interface MessageRepository {
     fun fetchMessages(conversationId: String): Flow<List<MessageModel>>
-    fun createMessage(message: MessageModel): MessageModel
+    suspend fun createMessage(message: MessageModel): MessageModel
     fun deleteMessage()
     suspend fun deleteMessagesByConversation(conversationId: String)
+    suspend fun fetchMessagesLocal(conversationId: String): List<MessageModel>
     
 }

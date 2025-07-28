@@ -30,16 +30,14 @@ class ConversationRepositoryImpl @Inject constructor(
     }
 
     override suspend fun deleteConversation(conversationId: String) {
-        fsInstance
+        val snapshot = fsInstance
             .collection("conversations")
             .whereEqualTo("id", conversationId)
             .get()
-            .addOnSuccessListener { res ->
-                res.documents.forEach { doc ->
-                    // Use the collection and document ID to form the correct path
-                    fsInstance.collection("conversations").document(doc.id).delete()
-                }
-            }
+            .await()
+        for (doc in snapshot.documents) {
+            fsInstance.collection("conversations").document(doc.id).delete().await()
+        }
     }
 
     private suspend fun getFireBaseSnapShot() =

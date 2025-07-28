@@ -1,32 +1,47 @@
 package com.example.promptpilot.viewmodels
 
+import android.net.Uri
 import android.util.Log
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.example.promptpilot.data.remote.ConversationRepository
 import com.example.promptpilot.data.remote.MessageRepository
 import com.example.promptpilot.data.remote.OpenAIRepositoryImpl
+import com.example.promptpilot.data.remote.PendingAttachmentEntity
+import com.example.promptpilot.data.remote.PendingAttachmentRepository
+import com.example.promptpilot.helpers.uploadPdfsToBackend
 import com.example.promptpilot.models.AI_Model
+import com.example.promptpilot.models.AttachmentType
+import com.example.promptpilot.models.ChatAttachment
 import com.example.promptpilot.models.ConversationModel
 import com.example.promptpilot.models.MessageModel
+import com.example.promptpilot.models.SenderType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import java.util.Date
+import java.util.UUID
 import javax.inject.Inject
 
-/**
- * Used to communicate between screens.
- */
 
 @HiltViewModel
 class ConversationViewModel @Inject constructor(
     private val conversationRepo: ConversationRepository,
     private val messageRepo: MessageRepository,
     private val openAIRepo: OpenAIRepositoryImpl,
+    private val pendingAttachmentRepo: PendingAttachmentRepository,
+    private val backendApi: com.example.promptpilot.data.api.BackendApi
 ) : ViewModel() {
+
+    val messageId = UUID.randomUUID().toString()
+    
+
     private val _currentConversation: MutableStateFlow<String> =
         MutableStateFlow(Date().time.toString())
     private val _conversations: MutableStateFlow<MutableList<ConversationModel>> = MutableStateFlow(
@@ -57,7 +72,19 @@ class ConversationViewModel @Inject constructor(
 
         if (_conversations.value.isNotEmpty()) {
             _currentConversation.value = _conversations.value.first().id
-            fetchMessages()
+
+            // 1. Load from Room for instant UI
+            val localMessages = messageRepo.fetchMessagesLocal(_currentConversation.value)
+            setMessages(localMessages.toMutableList())
+
+            // 2. Then sync with Firestore for updates
+            messageRepo.fetchMessages(_currentConversation.value).collectLatest { remoteMessages ->
+                // Update Room with any new/changed messages from Firestore
+                remoteMessages.forEach { message ->
+                    messageRepo.createMessage(message) // This will update Room and Firestore, but since IDs match, no duplicates
+                }
+                setMessages(remoteMessages.toMutableList())
+            }
         }
 
         _isFetching.value = false
@@ -68,20 +95,37 @@ class ConversationViewModel @Inject constructor(
         _currentConversation.value = conversation.id
 
         fetchMessages()
+        // Load pending attachments for the new conversation
+        loadPendingAttachments(conversation.id)
         _isFetching.value = false
     }
 
-    suspend fun sendMessage(message: String, imageUri: String?) {
+    suspend fun sendMessage(message: String, attachments: List<ChatAttachment>, context: android.content.Context) {
         Log.d("PromptPilot", "sendMessage called with: $message")
+        val pdfAttachments = attachments.filter { it.type == AttachmentType.PDF }
+
+        if (pdfAttachments.isNotEmpty()) {
+           val pdfUris = pdfAttachments.map { Uri.parse(it.url) }
+           val uploaded = uploadPdfsToBackend(backendApi, _currentConversation.value, pdfUris, context)
+           if (!uploaded) {
+               // Handle upload failure (show error to user)
+               return
+           }
+        }
         stopReceivingResults = false
         if (getMessagesByConversation(_currentConversation.value).isEmpty()) {
             createConversationRemote(message)
         }
 
         val newMessageModel = MessageModel(
+            id = messageId,
             question = message,
             answer = "Let me think...",
             conversationId = _currentConversation.value,
+            text = message, // or whatever text you want to store
+            sender = SenderType.USER, // or SenderType.ASSISTANT as appropriate
+            timestamp = System.currentTimeMillis(),
+            attachments = attachments
         )
 
         val currentListMessage: MutableList<MessageModel> =
@@ -90,6 +134,7 @@ class ConversationViewModel @Inject constructor(
         // Insert message to list
         currentListMessage.add(0, newMessageModel)
         setMessages(currentListMessage)
+        messageRepo.createMessage(newMessageModel)
 
         try {
             val aiReply = openAIRepo.getAIResponseFromBackend(
@@ -97,7 +142,7 @@ class ConversationViewModel @Inject constructor(
                 prompt = message,
                 model = _selectedModel.value.model,
                 chatId = _currentConversation.value,
-                imageUri = imageUri
+                image_urls = attachments.map { it.url }
             )
             if (aiReply.startsWith("Network error")) {
                 // Update UI with error state
@@ -144,17 +189,25 @@ class ConversationViewModel @Inject constructor(
         return messagesMap[conversationId]!!
     }
 
-    suspend fun deleteConversation(conversationId: String) {
-        // Delete remote
+    suspend fun deleteConversationAndFiles(conversationId: String) {
+        // 1. Delete conversation from Firestore
         conversationRepo.deleteConversation(conversationId)
-        
-        // Delete all messages for this conversation
+        // 2. Delete all messages for this conversation
         messageRepo.deleteMessagesByConversation(conversationId)
-
-        // Delete local
+        // 3. Delete all pending attachments for this conversation from Room
+        pendingAttachmentRepo.clearPendingAttachments(conversationId)
+        // 4. Delete all files for this conversation from backend (Cloudinary/Firestore)
+        try {
+            val response = backendApi.deleteFilesForConversation(conversationId)
+            if (!response.isSuccessful) {
+                // Optionally handle error
+            }
+        } catch (e: Exception) {
+            // Optionally handle network error
+        }
+        // 5. Remove from local state
         val conversations: MutableList<ConversationModel> = _conversations.value.toMutableList()
         val conversationToRemove = conversations.find { it.id == conversationId }
-
         if (conversationToRemove != null) {
             conversations.remove(conversationToRemove)
             _conversations.value = conversations
@@ -193,4 +246,59 @@ class ConversationViewModel @Inject constructor(
         stopReceivingResults = true
     }
 
+    private val _pendingAttachments = MutableStateFlow<List<ChatAttachment>>(emptyList())
+    val pendingAttachments: StateFlow<List<ChatAttachment>> = _pendingAttachments.asStateFlow()
+
+    init {
+        // Load pending attachments for the current conversation on ViewModel creation
+        viewModelScope.launch {
+            loadPendingAttachments(_currentConversation.value)
+        }
+    }
+
+    private suspend fun loadPendingAttachments(conversationId: String) {
+        val entities = pendingAttachmentRepo.getPendingAttachments(conversationId)
+        _pendingAttachments.value = entities.map {
+            ChatAttachment(
+                name = it.name,
+                url = it.url,
+                type = if (it.type == "IMAGE") com.example.promptpilot.models.AttachmentType.IMAGE else com.example.promptpilot.models.AttachmentType.PDF
+            )
+        }
+    }
+
+    fun addAttachment(attachment: ChatAttachment) {
+        _pendingAttachments.update { it + attachment }
+        // Persist in Room
+        viewModelScope.launch {
+            pendingAttachmentRepo.insertPendingAttachment(
+                PendingAttachmentEntity(
+                    conversationId = _currentConversation.value,
+                    name = attachment.name,
+                    url = attachment.url,
+                    type = if (attachment.type == com.example.promptpilot.models.AttachmentType.IMAGE) "IMAGE" else "PDF"
+                )
+            )
+        }
+    }
+
+    fun removeAttachment(attachment: ChatAttachment) {
+        _pendingAttachments.update { it - attachment }
+        // Remove from Room
+        viewModelScope.launch {
+            val entities = pendingAttachmentRepo.getPendingAttachments(_currentConversation.value)
+            val entity = entities.find { it.url == attachment.url && it.name == attachment.name }
+            if (entity != null) {
+                pendingAttachmentRepo.deletePendingAttachment(entity)
+            }
+        }
+    }
+
+    fun clearPendingAttachments() {
+        _pendingAttachments.value = emptyList()
+        // Clear from Room
+        viewModelScope.launch {
+            pendingAttachmentRepo.clearPendingAttachments(_currentConversation.value)
+        }
+    }
 }

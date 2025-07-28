@@ -111,7 +111,7 @@ fun ModernAppDrawer(
                         IconButton(onClick = {
                             // Launch a coroutine to call the suspend function
                             scope.launch { // <--- Use the scope here
-                                conversationViewModel.deleteConversation(conversation.id)
+                                conversationViewModel.deleteConversationAndFiles(conversation.id)
                             }
                         }) {
                             Icon(
@@ -133,7 +133,7 @@ fun ModernAppDrawer(
                     .padding(vertical = 12.dp, horizontal = 8.dp)
             ) {
                 Text(
-                    text = "Selected Model: ${selectedModel.model}",
+                    text = "Selected Model: ${selectedModel.name}",
                     color = Color.White,
                     modifier = Modifier.weight(1f)
                 )
@@ -148,7 +148,7 @@ fun ModernAppDrawer(
                 ) {
                     modelOptions.forEach { model ->
                         DropdownMenuItem(
-                            text = { Text(model.model) },
+                            text = { Text(model.name) },
                             onClick = {
                                 conversationViewModel.setSelectedModel(model)
                                 expanded = false

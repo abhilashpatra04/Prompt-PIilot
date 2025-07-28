@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.promptpilot.constants.messageCollection
 import com.example.promptpilot.helpers.DataHolder
 import com.example.promptpilot.models.MessageModel
+import com.example.promptpilot.models.SenderType
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
@@ -17,6 +18,7 @@ import javax.inject.Inject
 
 class MessageRepositoryImpl @Inject constructor(
     private val fsInstance: FirebaseFirestore,
+    private val appDatabase: AppDatabase
 ) : MessageRepository {
     private lateinit var result: QuerySnapshot
     override fun fetchMessages(conversationId: String): Flow<List<MessageModel>> =
@@ -46,9 +48,11 @@ class MessageRepositoryImpl @Inject constructor(
         }
     }
 
-    override fun createMessage(message: MessageModel): MessageModel {
-        fsInstance.collection(messageCollection).add(message)
-
+    override suspend fun createMessage(message: MessageModel): MessageModel {
+        // Save to Room
+        appDatabase.messageDao().insertMessage(message.toEntity())
+        // Save to Firestore (use message.id as the document ID)
+        fsInstance.collection(messageCollection).document(message.id).set(message)
         return message
     }
 
@@ -90,4 +94,25 @@ class MessageRepositoryImpl @Inject constructor(
             doc.reference.delete()
         }
     }
+    override suspend fun fetchMessagesLocal(conversationId: String): List<MessageModel> {
+        return appDatabase.messageDao().getMessagesByConversation(conversationId)
+            .map { it.toModel() }
+    }
+
+    private fun MessageModel.toEntity(): MessageEntity = MessageEntity(
+        id = id,
+        text = text,
+        conversationId = conversationId,
+        sender = sender.name,
+        timestamp = timestamp,
+        attachments = attachments
+    )
+    private fun MessageEntity.toModel(): MessageModel = MessageModel(
+        id = id,
+        text = text,
+        conversationId = conversationId,
+        sender = SenderType.valueOf(sender),
+        timestamp = timestamp,
+        attachments = attachments
+    )
 }
