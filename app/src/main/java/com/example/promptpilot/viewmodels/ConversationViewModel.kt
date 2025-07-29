@@ -18,6 +18,7 @@ import com.example.promptpilot.models.MessageModel
 import com.example.promptpilot.models.SenderType
 import com.example.promptpilot.screens.AgentType
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
@@ -95,7 +97,6 @@ class ConversationViewModel @Inject constructor(
         _isFetching.value = false
     }
 
-    // Enhanced sendMessage with web search and agent support
     suspend fun sendMessage(
         message: String,
         attachments: List<ChatAttachment>,
@@ -108,7 +109,9 @@ class ConversationViewModel @Inject constructor(
         val pdfAttachments = attachments.filter { it.type == AttachmentType.PDF }
         if (pdfAttachments.isNotEmpty()) {
             val pdfUris = pdfAttachments.map { Uri.parse(it.url) }
-            val uploaded = uploadPdfsToBackend(backendApi, _currentConversation.value, pdfUris, context)
+            val uploaded = withContext(Dispatchers.IO) {
+                uploadPdfsToBackend(backendApi, _currentConversation.value, pdfUris, context)
+            }
             if (!uploaded) {
                 return
             }
@@ -142,18 +145,22 @@ class ConversationViewModel @Inject constructor(
         try {
             _isStreaming.value = true
 
-            // Use streaming response
-            val aiReply = openAIRepo.getStreamingAIResponse(
-                uid = "abhilash04",
-                prompt = message,
-                model = _selectedModel.value.model,
-                chatId = _currentConversation.value,
-                imageUrls = attachments.map { it.url },
-                webSearch = webSearch,
-                agentType = agentType?.name
-            ) { streamedText ->
-                // Update UI in real-time as we receive chunks
-                updateLocalAnswer(streamedText)
+            // IMPORTANT: Use IO dispatcher for network operations
+            val aiReply = withContext(Dispatchers.IO) {
+                openAIRepo.getStreamingAIResponse(
+                    uid = "abhilash04",
+                    prompt = message,
+                    model = _selectedModel.value.model,
+                    chatId = _currentConversation.value,
+                    imageUrls = attachments.map { it.url }.takeIf { it.isNotEmpty() },
+                    webSearch = webSearch,
+                    agentType = agentType?.name
+                ) { streamedText ->
+                    // Update UI on Main thread
+                    viewModelScope.launch(Dispatchers.Main) {
+                        updateLocalAnswer(streamedText)
+                    }
+                }
             }
 
             // Final update with complete response
@@ -161,9 +168,10 @@ class ConversationViewModel @Inject constructor(
             _isStreaming.value = false
 
         } catch (e: Exception) {
-            _errorState.value = "Network error: Unable to connect to server."
+            Log.e("PromptPilot", "Error in sendMessage", e)
+            _errorState.value = "Network error: ${e.message}"
             _isStreaming.value = false
-            updateLocalAnswer("Sorry, I encountered an error. Please try again.")
+            updateLocalAnswer("Sorry, I encountered an error. Please try again. Error: ${e.message}")
         }
     }
 

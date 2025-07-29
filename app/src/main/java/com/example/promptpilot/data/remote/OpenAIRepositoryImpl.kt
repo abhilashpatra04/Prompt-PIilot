@@ -6,6 +6,8 @@ import com.example.promptpilot.data.api.BackendChatRequest
 import com.example.promptpilot.models.TextCompletionsParam
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -52,7 +54,6 @@ class OpenAIRepositoryImpl @Inject constructor(
         }
     }
 
-    // Enhanced streaming response with web search and agent support
     suspend fun getStreamingAIResponse(
         uid: String,
         prompt: String,
@@ -62,49 +63,72 @@ class OpenAIRepositoryImpl @Inject constructor(
         webSearch: Boolean = false,
         agentType: String? = null,
         onChunkReceived: (String) -> Unit
-    ): String {
+    ): String = withContext(Dispatchers.IO) {
         Log.d("PromptPilot", "getStreamingAIResponse called with: $prompt, webSearch: $webSearch, agent: $agentType")
 
-        return try {
+        try {
+            // Create JSON request body with proper null handling
             val requestBody = JSONObject().apply {
                 put("uid", uid)
                 put("prompt", prompt)
                 put("model", model)
-                put("chat_id", chatId)
+                // Handle null values properly
+                if (chatId != null) {
+                    put("chat_id", chatId)
+                } else {
+                    put("chat_id", JSONObject.NULL)
+                }
                 put("title", "Untitled")
-                put("image_urls", imageUrls)
+                // Handle image_urls array properly
+                if (!imageUrls.isNullOrEmpty()) {
+                    val imageArray = org.json.JSONArray()
+                    imageUrls.forEach { imageArray.put(it) }
+                    put("image_urls", imageArray)
+                } else {
+                    put("image_urls", JSONObject.NULL)
+                }
                 put("web_search", webSearch)
-                put("agent_type", agentType)
+                // Handle agent_type properly
+                if (agentType != null) {
+                    put("agent_type", agentType)
+                } else {
+                    put("agent_type", JSONObject.NULL)
+                }
                 put("stream", true)
             }
+
+            Log.d("PromptPilot", "Request body: ${requestBody.toString()}")
 
             val request = Request.Builder()
                 .url("http://10.54.138.76:8000/chat") // Replace with your backend URL
                 .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
+                .addHeader("Content-Type", "application/json")
                 .build()
 
             val response = okHttpClient.newCall(request).execute()
 
             if (!response.isSuccessful) {
-                throw Exception("HTTP ${response.code}: ${response.message}")
+                val errorBody = response.body?.string() ?: "Unknown error"
+                Log.e("PromptPilot", "HTTP Error ${response.code}: $errorBody")
+                throw Exception("HTTP ${response.code}: ${response.message}. Body: $errorBody")
             }
 
             val responseBody = response.body
-            val reader = BufferedReader(InputStreamReader(responseBody.byteStream()))
+            val reader = BufferedReader(InputStreamReader(responseBody?.byteStream()))
 
             var fullResponse = ""
             var line: String?
 
             while (reader.readLine().also { line = it } != null) {
                 if (line!!.startsWith("data: ")) {
-                    val jsonStr = line.substring(6) // Remove "data: " prefix
+                    val jsonStr = line!!.substring(6) // Remove "data: " prefix
                     try {
                         val jsonData = JSONObject(jsonStr)
 
                         if (jsonData.has("chunk")) {
                             val chunk = jsonData.getString("chunk")
                             fullResponse += chunk
-                            onChunkReceived(fullResponse) // Update UI with accumulated text
+                            onChunkReceived(fullResponse) // This should be called on main thread by caller
                         } else if (jsonData.has("done") && jsonData.getBoolean("done")) {
                             break
                         } else if (jsonData.has("error")) {
@@ -126,7 +150,7 @@ class OpenAIRepositoryImpl @Inject constructor(
         } catch (e: Exception) {
             Log.e("PromptPilot", "Error in streaming response", e)
             onChunkReceived("Sorry, I encountered an error. Please try again.")
-            "Network error: Unable to connect to server."
+            "Network error: Unable to connect to server. Error: ${e.message}"
         }
     }
 }
