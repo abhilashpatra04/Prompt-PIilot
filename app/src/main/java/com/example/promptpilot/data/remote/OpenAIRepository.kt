@@ -13,4 +13,5 @@ interface OpenAIRepository {
         title: String = "Untitled",
         image_urls: List<String>? = null
     ): String
+
 }
