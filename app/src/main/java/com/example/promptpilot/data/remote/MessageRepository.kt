@@ -9,5 +9,4 @@ interface MessageRepository {
     fun deleteMessage()
     suspend fun deleteMessagesByConversation(conversationId: String)
     suspend fun fetchMessagesLocal(conversationId: String): List<MessageModel>
-    
 }

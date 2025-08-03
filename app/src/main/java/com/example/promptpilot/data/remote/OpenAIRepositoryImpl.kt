@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -15,12 +16,18 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 class OpenAIRepositoryImpl @Inject constructor(
     private val backendApi: BackendApi,
     @com.example.promptpilot.di.StreamingClient private val okHttpClient: OkHttpClient
 ) : OpenAIRepository {
+
+    companion object {
+        private const val TIMEOUT_SECONDS = 120L // 2 minutes timeout
+        private const val BASE_URL = "http://10.196.75.76:8000" // Replace with your actual server URL
+    }
 
     override fun textCompletionsWithStream(params: TextCompletionsParam): Flow<String> = flow {
         throw UnsupportedOperationException("Direct OpenAI streaming is deprecated. Use getStreamingAIResponse instead.")
@@ -43,14 +50,27 @@ class OpenAIRepositoryImpl @Inject constructor(
                 model = model,
                 chat_id = chatId,
                 title = title,
-                image_urls = image_urls
+                image_urls = image_urls,
+                stream = false // Explicitly set to false for non-streaming
             )
-            val response = backendApi.getAIResponse(backendRequest)
-            Log.d("PromptPilot", "AI reply received: ${response.reply}")
-            response.reply
+
+            val response = withTimeoutOrNull(TIMEOUT_SECONDS * 1000) {
+                backendApi.getAIResponse(backendRequest)
+            }
+
+            if (response != null) {
+                Log.d("PromptPilot", "AI reply received: ${response.reply}")
+                response.reply
+            } else {
+                "Request timed out. Please try again with a shorter message."
+            }
         } catch (e: Exception) {
             Log.e("PromptPilot", "Error getting AI response", e)
-            "Network error: Unable to connect to server."
+            when {
+                e.message?.contains("timeout", ignoreCase = true) == true -> "Request timed out. Please try again."
+                e.message?.contains("network", ignoreCase = true) == true -> "Network error. Please check your connection."
+                else -> "Unable to connect to server. Please try again."
+            }
         }
     }
 
@@ -72,133 +92,136 @@ class OpenAIRepositoryImpl @Inject constructor(
                 put("uid", uid)
                 put("prompt", prompt)
                 put("model", model)
-                // Handle null values properly
-                if (chatId != null) {
-                    put("chat_id", chatId)
-                } else {
-                    put("chat_id", JSONObject.NULL)
-                }
+                put("chat_id", chatId ?: JSONObject.NULL)
                 put("title", "Untitled")
-                // Handle image_urls array properly
-                if (!imageUrls.isNullOrEmpty()) {
-                    val imageArray = org.json.JSONArray()
-                    imageUrls.forEach { imageArray.put(it) }
-                    put("image_urls", imageArray)
+                put("image_urls", if (!imageUrls.isNullOrEmpty()) {
+                    org.json.JSONArray().apply {
+                        imageUrls.forEach { put(it) }
+                    }
                 } else {
-                    put("image_urls", JSONObject.NULL)
-                }
+                    JSONObject.NULL
+                })
                 put("web_search", webSearch)
-                // Handle agent_type properly
-                if (agentType != null) {
-                    put("agent_type", agentType)
-                } else {
-                    put("agent_type", JSONObject.NULL)
-                }
+                put("agent_type", agentType ?: JSONObject.NULL)
                 put("stream", true)
             }
 
             Log.d("PromptPilot", "Request body: ${requestBody.toString()}")
 
+            // Create request with proper timeout configuration
             val request = Request.Builder()
-                .url("http://10.54.138.76:8000/chat") // Replace with your backend URL
+                .url("$BASE_URL/chat")
                 .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                 .addHeader("Content-Type", "application/json")
+                .addHeader("Accept", "text/plain")
+                .addHeader("Cache-Control", "no-cache")
                 .build()
 
-            val response = okHttpClient.newCall(request).execute()
+            // Create a client with longer timeouts for streaming
+            val streamingClient = okHttpClient.newBuilder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .build()
+
+            val response = streamingClient.newCall(request).execute()
 
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string() ?: "Unknown error"
                 Log.e("PromptPilot", "HTTP Error ${response.code}: $errorBody")
-                throw Exception("HTTP ${response.code}: ${response.message}. Body: $errorBody")
+                val errorMessage = when (response.code) {
+                    500 -> "Server error. Please try again."
+                    503 -> "Service temporarily unavailable. Please try again later."
+                    else -> "Connection error (${response.code}). Please try again."
+                }
+                throw Exception(errorMessage)
             }
 
-            val responseBody = response.body
-            val reader = BufferedReader(InputStreamReader(responseBody?.byteStream()))
+            val responseBody = response.body ?: throw Exception("Empty response body")
+            val reader = BufferedReader(InputStreamReader(responseBody.byteStream()))
 
             var fullResponse = ""
             var line: String?
+            var lastUpdateTime = System.currentTimeMillis()
 
-            while (reader.readLine().also { line = it } != null) {
-                if (line!!.startsWith("data: ")) {
-                    val jsonStr = line!!.substring(6) // Remove "data: " prefix
-                    try {
-                        val jsonData = JSONObject(jsonStr)
+            try {
+                while (reader.readLine().also { line = it } != null) {
+                    val currentTime = System.currentTimeMillis()
 
-                        if (jsonData.has("chunk")) {
-                            val chunk = jsonData.getString("chunk")
-                            fullResponse += chunk
-                            onChunkReceived(fullResponse) // This should be called on main thread by caller
-                        } else if (jsonData.has("done") && jsonData.getBoolean("done")) {
-                            break
-                        } else if (jsonData.has("error")) {
-                            throw Exception(jsonData.getString("error"))
-                        }
-                    } catch (e: Exception) {
-                        Log.e("PromptPilot", "Error parsing streaming response: ${e.message}")
-                        continue
+                    // Check for timeout during streaming
+                    if (currentTime - lastUpdateTime > TIMEOUT_SECONDS * 1000) {
+                        Log.w("PromptPilot", "Streaming timeout - no data received for ${TIMEOUT_SECONDS} seconds")
+                        break
                     }
+
+                    if (line!!.startsWith("data: ")) {
+                        val jsonStr = line!!.substring(6).trim() // Remove "data: " prefix
+
+                        if (jsonStr == "[DONE]" || jsonStr.isEmpty()) {
+                            Log.d("PromptPilot", "Streaming completed normally")
+                            break
+                        }
+
+                        try {
+                            val jsonData = JSONObject(jsonStr)
+
+                            when {
+                                jsonData.has("chunk") -> {
+                                    val chunk = jsonData.getString("chunk")
+                                    if (chunk.isNotEmpty()) {
+                                        fullResponse += chunk
+                                        onChunkReceived(fullResponse)
+                                        lastUpdateTime = currentTime
+                                    }
+                                }
+                                jsonData.has("done") && jsonData.getBoolean("done") -> {
+                                    Log.d("PromptPilot", "Received done signal")
+                                    break
+                                }
+                                jsonData.has("error") -> {
+                                    val error = jsonData.getString("error")
+                                    Log.e("PromptPilot", "Server error: $error")
+                                    throw Exception("Server error: $error")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w("PromptPilot", "Error parsing streaming response line: $jsonStr", e)
+                            // Continue reading instead of failing completely
+                            continue
+                        }
+                    }
+                }
+            } finally {
+                try {
+                    reader.close()
+                    response.close()
+                } catch (e: Exception) {
+                    Log.w("PromptPilot", "Error closing resources", e)
                 }
             }
 
-            reader.close()
-            response.close()
-
             Log.d("PromptPilot", "Streaming completed. Full response length: ${fullResponse.length}")
+
+            if (fullResponse.isEmpty()) {
+                throw Exception("No response received from server")
+            }
+
             fullResponse
 
         } catch (e: Exception) {
             Log.e("PromptPilot", "Error in streaming response", e)
-            onChunkReceived("Sorry, I encountered an error. Please try again.")
-            "Network error: Unable to connect to server. Error: ${e.message}"
+            val errorMessage = when {
+                e.message?.contains("timeout", ignoreCase = true) == true ->
+                    "Response timed out. Please try with a shorter message."
+                e.message?.contains("network", ignoreCase = true) == true ->
+                    "Network error. Please check your connection."
+                e.message?.contains("server error", ignoreCase = true) == true ->
+                    e.message ?: "Server error occurred."
+                else -> "Connection error. Please try again."
+            }
+
+            onChunkReceived(errorMessage)
+            errorMessage
         }
     }
 }
-//package com.example.promptpilot.data.remote
-//
-//import android.util.Log
-//import com.example.promptpilot.data.api.BackendApi
-//import com.example.promptpilot.data.api.BackendChatRequest
-//import com.example.promptpilot.models.TextCompletionsParam
-//import kotlinx.coroutines.flow.Flow
-//import kotlinx.coroutines.flow.flow
-//import javax.inject.Inject
-//
-//
-//class OpenAIRepositoryImpl @Inject constructor(
-//    private val backendApi: BackendApi,
-//) : OpenAIRepository {
-//    override fun textCompletionsWithStream(params: TextCompletionsParam): Flow<String> = flow {
-//        throw UnsupportedOperationException("Direct OpenAI streaming is deprecated. Use getAIResponseFromBackend instead.")
-//    }
-//    // New: Use backend server for AI response
-//    override suspend fun getAIResponseFromBackend(
-//        uid: String,
-//        prompt: String,
-//        model: String,
-//        chatId: String?,
-//        title: String,
-//        image_urls: List<String>?
-//    ): String {
-//        Log.d("PromptPilot", "getAIResponseFromBackend called with: $prompt, $model")
-//        return try {
-//            val backendRequest = BackendChatRequest(
-//                uid = uid,
-//                prompt = prompt,
-//                model = model,
-//                chat_id = chatId,
-//                title = title,
-//                image_urls = image_urls
-//            )
-//            val response = backendApi.getAIResponse(backendRequest)
-//            Log.d("PromptPilot", "AI reply received: ${response.reply}")
-//            response.reply
-//        } catch (e: Exception) {
-//            Log.e("PromptPilot", "Error getting AI response", e)
-//            // Log the error if needed
-//            // Return a special error string, or rethrow a custom exception
-//            "Network error: Unable to connect to server."
-//        }
-//    }
-//
-//}

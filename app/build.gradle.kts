@@ -8,9 +8,6 @@ plugins {
     id ("com.google.dagger.hilt.android")
     id("kotlin-kapt")
     alias(libs.plugins.kotlin.compose.compiler)
-
-//    id ("kotlinx-serialization")
-//    alias(libs.plugins.kotlin.compose.compiler)
 }
 
 android {
@@ -87,16 +84,16 @@ dependencies {
     // View Binding
     implementation("androidx.compose.ui:ui-viewbinding:1.8.3")
     // Firebase (BoM handles versions for all Firebase libraries)
-    implementation(platform("com.google.firebase:firebase-bom:33.16.0"))
+    implementation(platform("com.google.firebase:firebase-bom:34.0.0"))
     implementation("com.google.firebase:firebase-analytics")
     implementation("com.google.firebase:firebase-firestore-ktx:25.1.4")
     implementation("com.google.firebase:firebase-storage-ktx:21.0.2")
     // Hilt (Dependency Injection)
-    implementation("com.google.dagger:hilt-android:2.56.2")
+    implementation("com.google.dagger:hilt-android:2.57")
     implementation(libs.androidx.core.animation)
     implementation(libs.androidx.room.common.jvm)
     implementation(libs.androidx.room.runtime.android)
-    kapt("com.google.dagger:hilt-compiler:2.56.2")
+    kapt("com.google.dagger:hilt-compiler:2.57")
     kapt("androidx.room:room-compiler:2.7.2")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
     // Kotlinx
@@ -110,18 +107,18 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.1.0")
     implementation("com.squareup.okhttp3:logging-interceptor:5.1.0")
 
-    // Rich Text UI (Compose)
-//    implementation("io.github.raamcosta.compose-richtext:richtext-commonmark:0.17.0")
-//    implementation("io.github.raamcosta.compose-richtext:richtext-ui-material:0.17.0")
-//    implementation("io.github.raamcosta.compose-richtext:richtext-ui-material3:0.17.0")
-
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.8.3")
     debugImplementation("androidx.compose.ui:ui-tooling:1.8.3")
     debugImplementation("androidx.compose.ui:ui-test-manifest:1.8.3")
+    implementation("com.github.jeziellago:compose-markdown:0.3.6")
+
+    // For permissions handling
+    implementation ("androidx.activity:activity-compose:1.10.1")
+    implementation ("com.google.accompanist:accompanist-permissions:0.37.3")
 }
 
 // Allow references to generated code

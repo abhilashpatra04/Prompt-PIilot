@@ -21,15 +21,16 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModernScaffold(
-    conversationViewModel: ConversationViewModel = hiltViewModel() // Connects to the same ViewModel as the old UI
+    viewmodel: ConversationViewModel = hiltViewModel() // Connects to the same ViewModel as the old UI
 ) {
     // Ensure conversations are loaded from persistent storage on app start
     LaunchedEffect(Unit) {
-        conversationViewModel.initialize()
+        viewmodel.initialize()
     }
     // State for controlling the navigation drawer (open/close)
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val isTtsEnabled by viewmodel.isTtsEnabled.collectAsState()
 
     // ModalNavigationDrawer is the Material 3 way to show a side drawer
     Column(
@@ -39,7 +40,9 @@ fun ModernScaffold(
             .background(Color.Black)
     ) {
         ModernAppBar(
-            onMenuClick = { scope.launch { drawerState.open() } }
+            onMenuClick = { scope.launch { drawerState.open() } },
+            isTtsEnabled = isTtsEnabled,
+            onTtsToggle = { viewmodel.toggleTts() }
         )
         HorizontalDivider(modifier = Modifier.padding(vertical = 1.dp))
 
@@ -54,20 +57,20 @@ fun ModernScaffold(
                         ModernAppDrawer(
                             onChatSelected = { conversationId ->
                                 // Find the conversation by ID and switch to it
-                                val conversation = conversationViewModel.conversationsState.value.find { it.id == conversationId }
+                                val conversation = viewmodel.conversationsState.value.find { it.id == conversationId }
                                 if (conversation != null) {
-                                    scope.launch { conversationViewModel.onConversation(conversation) }
+                                    scope.launch { viewmodel.onConversation(conversation) }
                                     // Optionally close the drawer after switching
                                     scope.launch { drawerState.close() }
-                                }
+                                 }
                             },
                             onNewChat = {
-                                scope.launch { conversationViewModel.newConversation() }
+                                scope.launch { viewmodel.newConversation() }
                                 // Optionally close the drawer after starting new chat
                                 scope.launch { drawerState.close() }
                             },
                             onSettings = { /* TODO: Settings logic */ },
-                            conversationViewModel = conversationViewModel
+                            conversationViewModel = viewmodel
                         )
                     }
                 },
@@ -79,18 +82,11 @@ fun ModernScaffold(
                             .systemBarsPadding(),
                         color = Color.Black
                     ) {
-                        ModernConversation(
-                            conversationViewModel = conversationViewModel
-                        )
+                        ModernConversation()
+
                     }
                 }
             )
         }
     }
 }
-
-// Preview for ModernScaffold (for easy testing in Android Studio)
-@Composable
-fun ModernScaffoldPreview() {
-    ModernScaffold()
-} 

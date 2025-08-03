@@ -16,10 +16,6 @@ import dagger.hilt.android.AndroidEntryPoint
 // This annotation enables dependency injection with Hilt for this Activity.
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
-    // ViewModel for managing UI-related data in a lifecycle-conscious way.
-//    private val mainViewModel: MainViewModel by viewModels()
-
-    // onCreate is called when the activity is starting.
     @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {

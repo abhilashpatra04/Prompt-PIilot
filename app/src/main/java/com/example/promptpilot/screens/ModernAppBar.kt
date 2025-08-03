@@ -6,7 +6,11 @@
 package com.example.promptpilot.screens
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -19,7 +23,9 @@ import com.example.promptpilot.ui.theme.MainTheme
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModernAppBar(
-    onMenuClick: () -> Unit // Callback for when the menu (drawer) button is clicked
+    onMenuClick: () -> Unit, // Callback for when the menu (drawer) button is clicked
+    isTtsEnabled: Boolean = true, // Voice response state
+    onTtsToggle: () -> Unit // Callback for voice toggle
 ) {
     MainTheme { // Use the app's theme for consistent look
         Surface(
@@ -44,6 +50,18 @@ fun ModernAppBar(
                             Icons.Filled.Menu, // Hamburger menu icon
                             contentDescription = "Menu",
                             tint = Color.Gray, // Icon color
+                        )
+                    }
+                },
+                actions = {
+                    // Voice response toggle button
+                    IconButton(
+                        onClick = { onTtsToggle() }
+                    ) {
+                        Icon(
+                            imageVector = if (isTtsEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                            contentDescription = if (isTtsEnabled) "Disable voice responses" else "Enable voice responses",
+                            tint = if (isTtsEnabled) Color.Green else Color.Gray
                         )
                     }
                 },

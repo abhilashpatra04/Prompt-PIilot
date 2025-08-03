@@ -1,6 +1,13 @@
 package com.example.promptpilot.screens
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -23,9 +31,12 @@ import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,6 +46,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,12 +64,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.example.promptpilot.data.remote.ChatImage
 import com.example.promptpilot.helpers.uploadImageToCloudinary
 import com.example.promptpilot.models.AttachmentType
 import com.example.promptpilot.models.ChatAttachment
+import com.example.promptpilot.utils.VoiceInputManager
 import com.example.promptpilot.viewmodels.ConversationViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 
@@ -228,6 +243,12 @@ enum class AgentType(val displayName: String, val systemPrompt: String) {
         **YOUR APPROACH**: Provide secure, gas-optimized smart contracts with thorough explanations of blockchain concepts, potential risks, and best practices.
     """)
 }
+enum class VoiceState {
+    IDLE,           // Not recording
+    LISTENING,      // Recording and listening
+    PROCESSING,     // Processing speech to text
+    ERROR           // Error occurred
+}
 
 // Update your ModernTextInput to use these enhanced agents
 @OptIn(ExperimentalMaterial3Api::class)
@@ -235,13 +256,17 @@ enum class AgentType(val displayName: String, val systemPrompt: String) {
 fun ModernTextInput(
     onSend: (String, List<ChatAttachment>, Boolean, AgentType?) -> Unit,
     supportsImage: Boolean,
+    isStreaming: Boolean = false,
     conversationViewModel: ConversationViewModel = hiltViewModel()
 ) {
     val pendingAttachments by conversationViewModel.pendingAttachments.collectAsState()
     var text by remember { mutableStateOf(TextFieldValue("")) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
     val keyboardController = LocalSoftwareKeyboardController.current
+    var isRecording by remember { mutableStateOf(false) }
+    var voiceInputManager by remember { mutableStateOf<VoiceInputManager?>(null) }
 
     // Web search state
     var isWebSearchEnabled by remember { mutableStateOf(false) }
@@ -249,6 +274,36 @@ fun ModernTextInput(
     // Agent dropdown state
     var showAgentDropdown by remember { mutableStateOf(false) }
     var selectedAgent by remember { mutableStateOf<AgentType?>(null) }
+    // Voice recording states
+    var voiceState by remember { mutableStateOf(VoiceState.IDLE) }
+    var speechRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
+    var transcribedText by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        voiceInputManager = VoiceInputManager(context).apply {
+            initializeTTS {
+                Log.d("Voice", "TTS initialized")
+            }
+        }
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            startVoiceRecognition(
+                context = context,
+                onStateChange = { voiceState = it },
+                onTextResult = { result ->
+                    transcribedText = result
+                    text = TextFieldValue(result)
+                    voiceState = VoiceState.IDLE
+                },
+                onSpeechRecognizerChange = { speechRecognizer = it }
+            )
+        } else {
+            voiceState = VoiceState.ERROR
+        }
+    }
+
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
@@ -280,6 +335,34 @@ fun ModernTextInput(
             }
         }
     }
+    // Cleanup speech recognizer
+    DisposableEffect(Unit) {
+        onDispose {
+            speechRecognizer?.destroy()
+        }
+    }
+
+    // Auto-send after voice input with delay
+    LaunchedEffect(transcribedText) {
+        if (transcribedText.isNotEmpty() && voiceState == VoiceState.IDLE) {
+            delay(1000) // Give user 1 second to see/edit the transcribed text
+            if (text.text == transcribedText) { // Only auto-send if text hasn't been modified
+                scope.launch {
+                    try {
+                        onSend(text.text.trim(), pendingAttachments, isWebSearchEnabled, selectedAgent)
+                        conversationViewModel.clearPendingAttachments()
+                        text = TextFieldValue("")
+                        transcribedText = ""
+                        keyboardController?.hide()
+                    } catch (e: Exception) {
+                        Log.e("VoiceInput", "Error sending voice message", e)
+                    }
+                }
+            }
+        }
+    }
+    val hasTextOrAttachments = text.text.isNotEmpty() || pendingAttachments.isNotEmpty()
+    val isRecordingOrStreaming = voiceState == VoiceState.LISTENING || voiceState == VoiceState.PROCESSING || isStreaming
 
     Box(
         modifier = Modifier
@@ -293,24 +376,28 @@ fun ModernTextInput(
                 .clip(RoundedCornerShape(topEnd = 16.dp, topStart = 16.dp))
                 .background(Color.DarkGray)
         ) {
+            if (voiceState != VoiceState.IDLE) {
+                VoiceStateIndicator(voiceState = voiceState)
+            }
+
             // Web search indicator
             if (isWebSearchEnabled) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color.Blue.copy(alpha = 0.2f))
+                        .background(Color.Transparent)
                         .padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
                         imageVector = Icons.Default.Search,
                         contentDescription = "Web Search Active",
-                        tint = Color.Blue,
+                        tint = Color.Transparent,
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
                         text = "🌐 Live Web Search Enabled",
-                        color = Color.Blue,
+                        color = Color.White,
                         fontSize = 12.sp,
                         modifier = Modifier.padding(start = 4.dp)
                     )
@@ -384,9 +471,11 @@ fun ModernTextInput(
                 onValueChange = { text = it },
                 placeholder = {
                     val placeholderText = when {
+                        voiceState == VoiceState.LISTENING -> "🎤 Listening..."
+                        voiceState == VoiceState.PROCESSING -> "🔄 Processing speech..."
                         selectedAgent != null -> "Ask your ${selectedAgent!!.displayName} anything..."
                         isWebSearchEnabled -> "Search the web in real-time..."
-                        else -> "Type your message..."
+                        else -> "Type or speak your message..."
                     }
                     Text(placeholderText, fontSize = 14.sp, color = Color.White.copy(alpha = 0.7f))
                 },
@@ -406,6 +495,7 @@ fun ModernTextInput(
                 minLines = 1,
                 maxLines = 6,
                 singleLine = false,
+                enabled = !isRecordingOrStreaming
             )
 
             // Enhanced bottom toolbar
@@ -420,8 +510,9 @@ fun ModernTextInput(
                     onClick = {
                         isWebSearchEnabled = !isWebSearchEnabled
                         if (isWebSearchEnabled) selectedAgent = null
-                    }
-                ) {
+                    },
+                    enabled = !isRecordingOrStreaming
+                    ) {
                     Icon(
                         imageVector = Icons.Default.Search,
                         contentDescription = if (isWebSearchEnabled) "Disable Web Search" else "Enable Web Search",
@@ -438,7 +529,8 @@ fun ModernTextInput(
                     IconButton(
                         onClick = {
                             showAgentDropdown = true
-                        }
+                        },
+                        enabled = !isRecordingOrStreaming
                     ) {
                         Icon(
                             imageVector = if (showAgentDropdown) Icons.Default.ArrowDropUp else Icons.Default.SmartToy,
@@ -471,7 +563,6 @@ fun ModernTextInput(
                                 }
                             )
                         }
-
                         // All available agents
                         AgentType.entries.forEach { agent ->
                             DropdownMenuItem(
@@ -530,274 +621,257 @@ fun ModernTextInput(
                         )
                     }
                 }
-
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Enhanced send button
                 IconButton(
                     onClick = {
-                        if (text.text.isNotEmpty() || pendingAttachments.isNotEmpty()) {
-                            scope.launch {
-                                try {
-                                    // Send message with enhanced features
-                                    onSend(text.text.trim(), pendingAttachments, isWebSearchEnabled, selectedAgent)
-
-                                    // Immediate cleanup for better UX
-                                    conversationViewModel.clearPendingAttachments()
-                                    text = TextFieldValue("")
-                                    keyboardController?.hide()
-
-                                    // Note: Keep agent and web search active for follow-up questions
-
-                                } catch (e: Exception) {
-                                    Log.e("AttachmentUpload", "Error sending message", e)
+                        when {
+                            // If recording or streaming, show stop button
+                            isRecordingOrStreaming -> {
+                                if (voiceState == VoiceState.LISTENING) {
+                                    speechRecognizer?.stopListening()
+                                    voiceState = VoiceState.PROCESSING
+                                } else if (voiceState == VoiceState.PROCESSING) {
+                                    speechRecognizer?.cancel()
+                                    voiceState = VoiceState.IDLE
+                                } else if (isStreaming) {
+                                    conversationViewModel.stopReceivingResults()
+                                }
+                            }
+                            // If has text or attachments, send message
+                            hasTextOrAttachments -> {
+                                scope.launch {
+                                    try {
+                                        onSend(text.text.trim(), pendingAttachments, isWebSearchEnabled, selectedAgent)
+                                        conversationViewModel.clearPendingAttachments()
+                                        text = TextFieldValue("")
+                                        transcribedText = ""
+                                        keyboardController?.hide()
+                                    } catch (e: Exception) {
+                                        Log.e("SendMessage", "Error sending message", e)
+                                    }
+                                }
+                            }
+                            // If empty, show mic button and start voice recognition
+                            else -> {
+                                when (voiceState) {
+                                    VoiceState.IDLE -> {
+                                        // Check microphone permission
+                                        if (ContextCompat.checkSelfPermission(
+                                                context,
+                                                Manifest.permission.RECORD_AUDIO
+                                            ) == PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            startVoiceRecognition(
+                                                context = context,
+                                                onStateChange = { voiceState = it },
+                                                onTextResult = { result ->
+                                                    transcribedText = result
+                                                    text = TextFieldValue(result)
+                                                    voiceState = VoiceState.IDLE
+                                                },
+                                                onSpeechRecognizerChange = { speechRecognizer = it }
+                                            )
+                                        } else {
+                                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                        }
+                                    }
+                                    VoiceState.ERROR -> {
+                                        // Reset error state
+                                        voiceState = VoiceState.IDLE
+                                    }
+                                    else -> {
+                                        // Should not reach here, but reset if needed
+                                        voiceState = VoiceState.IDLE
+                                    }
                                 }
                             }
                         }
                     }
                 ) {
-                    if (text.text.isEmpty() && pendingAttachments.isEmpty()) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = "Voice Input",
-                            tint = Color.White
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send Message",
-                            tint = Color.White,
-                            modifier = Modifier
-                                .background(
-                                    color = Color.Blue.copy(alpha = 0.3f),
-                                    shape = RoundedCornerShape(16.dp)
-                                )
-                                .padding(6.dp)
-                        )
+                    when {
+                        // Stop button during recording/streaming
+                        isRecordingOrStreaming -> {
+                            Icon(
+                                imageVector = Icons.Default.Stop,
+                                contentDescription = "Stop",
+                                tint = Color.Red,
+                                modifier = Modifier
+                                    .background(
+                                        color = Color.Red.copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(16.dp)
+                                    )
+                                    .padding(6.dp)
+                            )
+                        }
+                        // Send button when has content
+                        hasTextOrAttachments -> {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send Message",
+                                tint = Color.White,
+                                modifier = Modifier
+                                    .background(
+                                        color = Color.Blue.copy(alpha = 0.3f),
+                                        shape = RoundedCornerShape(16.dp)
+                                    )
+                                    .padding(6.dp)
+                            )
+                        }
+                        // Mic button when empty
+                        else -> {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Voice Input",
+                                tint = Color.White
+                            )
+                        }
                     }
                 }
             }
         }
     }
 }
-
-// The modern input box composable
-//@OptIn(ExperimentalMaterial3Api::class)
-//@Composable
-//fun ModernTextInput(
-//    onSend: (String, List<ChatAttachment>) -> Unit,
-//    supportsImage: Boolean,
-//    conversationViewModel: ConversationViewModel = hiltViewModel()
-//) {
-//    val pendingAttachments by conversationViewModel.pendingAttachments.collectAsState()
-//        var text by remember { mutableStateOf(TextFieldValue("")) }
-//    val scope = rememberCoroutineScope()
-//    val context = LocalContext.current
-//        val launcher = rememberLauncherForActivityResult(
-//        contract = ActivityResultContracts.GetMultipleContents()
-//    ) { uris: List<Uri> ->
-//        uris.forEach { uri ->
-//            scope.launch {
-//                val url = uploadImageToCloudinary(context, uri)
-//                if (url != null) {
-//                    conversationViewModel.addAttachment(ChatAttachment(
-//                        name = uri.lastPathSegment ?: "image",
-//                        url = url,
-//                        type = AttachmentType.IMAGE
-//                    ))
-//                }
-//            }
-//        }
-//    }
-//    val pdfLauncher = rememberLauncherForActivityResult(
-//        contract = ActivityResultContracts.GetMultipleContents()
-//    ) { uris: List<Uri> ->
-//        uris.forEach { uri ->
-//            scope.launch {
-//                conversationViewModel.addAttachment(ChatAttachment(
-//                    name = uri.lastPathSegment ?: "pdf",
-//                    url = uri.toString(),
-//                    type = AttachmentType.PDF
-//                ))
-//            }
-//        }
-//    }
-//    var expanded by remember { mutableStateOf(false) }
-//
-//    Box(
-//        modifier = Modifier
-//            .clip(RoundedCornerShape(topEnd = 16.dp, topStart = 16.dp))
-//            .background(Color.DarkGray)
-//            .fillMaxWidth()
-//    ) {
-//        Column(
-//            modifier = Modifier
-//                .fillMaxWidth()
-//                .clip(RoundedCornerShape(topEnd = 16.dp, topStart = 16.dp))
-//                .background(Color.DarkGray)
-//        ) {
-//            // 1. Image chips row (if any images)
-//            AttachmentChipsRow(
-//                attachments = pendingAttachments,
-//                onRemove = { conversationViewModel.removeAttachment(it) },
-//                onClick = { /* set zoomedAttachment = it, see Step 4 */ }
-//            )
-//
-//            // 2. Text input row
-//            TextField(
-//                value = text,
-//                onValueChange = { text = it },
-//                placeholder = { Text("Type your message...", fontSize = 14.sp, color = Color.White) },
-//                shape = RoundedCornerShape(24.dp),
-//                colors = TextFieldDefaults.colors(
-//                    focusedContainerColor = Color.Transparent,
-//                    unfocusedContainerColor = Color.Transparent,
-//                    focusedIndicatorColor = Color.Transparent,
-//                    unfocusedIndicatorColor = Color.Transparent,
-//                    cursorColor = Color.White,
-//                    focusedTextColor = Color.White,
-//                    unfocusedTextColor = Color.White,
-//                    focusedPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-//                    unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-//                ),
-//                modifier = Modifier
-//                    .fillMaxWidth()
-//                    .padding(vertical = 4.dp),
-//                minLines = 1,
-//                maxLines = 6,
-//                singleLine = false,
-//            )
-//
-//            // 3. Bottom row: image picker and send button
-//            Row(
-//                modifier = Modifier
-//                    .fillMaxWidth()
-//                    .padding(bottom = 8.dp),
-//                verticalAlignment = Alignment.CenterVertically
-//            ) {
-//                if (supportsImage) {
-//                    IconButton(onClick = { launcher.launch("image/*") }) {
-//                        Icon(
-//                            imageVector = Icons.Default.Image,
-//                            contentDescription = "Add Image",
-//                            tint = Color.White
-//                        )
-//                    }
-//                    IconButton(onClick = { pdfLauncher.launch("application/pdf") }) {
-//                        Icon(
-//                            imageVector = Icons.Default.PictureAsPdf,
-//                            contentDescription = "Add PDF",
-//                            tint = Color.White
-//                        )
-//                    }
-//
-//                } else {
-//                    IconButton(onClick = {}) {
-//                        Icon(
-//                            imageVector = Icons.Default.Image,
-//                            contentDescription = "Add Image",
-//                            tint = Color.White
-//                        )
-//                    }
-//                    IconButton(onClick = {}) {
-//                        Icon(
-//                            imageVector = Icons.Default.PictureAsPdf,
-//                            contentDescription = "Add PDF",
-//                            tint = Color.White
-//                        )
-//                    }
-//                }
-//                Spacer(modifier = Modifier.weight(1f))
-//                IconButton(
-//                    onClick = {
-//                        if (text.text.isNotEmpty() || pendingAttachments.any { it.type == AttachmentType.IMAGE || it.type == AttachmentType.PDF }) {
-//                            scope.launch {
-//                                try {
-//                                    val contextAttachments = pendingAttachments.filter { it.type == AttachmentType.IMAGE || it.type == AttachmentType.PDF }
-//                                    Log.d("PromptPilot", "Sending attachments: ${contextAttachments.map { it.url }}")
-//                                    conversationViewModel.sendMessage(text.text.trim(), pendingAttachments, context)
-//                                    conversationViewModel.clearPendingAttachments()
-//                                    text = TextFieldValue("")
-//                                } catch (e: Exception) {
-//                                    Log.e("AttachmentUpload", "Error uploading attachment or sending message", e)
-//                                }
-//                            }
-//                        }
-//                    }
-//                ) {
-//                    if (text.text.isEmpty()) {
-//                        Icon(
-//                            imageVector = Icons.Default.Mic,
-//                            contentDescription = "Voice Input",
-//                            tint = Color.White
-//                        )
-//                    } else {
-//                        Icon(
-//                            imageVector = Icons.AutoMirrored.Filled.Send,
-//                            contentDescription = "Send",
-//                            tint = Color.White,
-//                            modifier = Modifier
-//                                .background(
-//                                    color = Color.Transparent,
-//                                    shape = RoundedCornerShape(16.dp)
-//                                )
-//                                .padding(6.dp)
-//                        )
-//                    }
-//                }
-//            }
-//        }
-//    }
-//}
 
 @Composable
-fun ImageContextChips(
-    images: List<ChatImage>,
-    onToggleContext: (ChatImage) -> Unit,
-    expanded: Boolean,
-    onExpandToggle: () -> Unit
-) {
-    val maxVisible = 1 // Increase if you want to show more chips by default
-    val visibleImages = if (expanded) images else images.take(maxVisible)
-    var images by remember { mutableStateOf(listOf<ChatImage>()) }
+fun VoiceStateIndicator(voiceState: VoiceState) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                when (voiceState) {
+                    VoiceState.LISTENING -> Color.Red.copy(alpha = 0.2f)
+                    VoiceState.PROCESSING -> Color.Yellow.copy(alpha = 0.2f)
+                    VoiceState.ERROR -> Color.Red.copy(alpha = 0.3f)
+                    else -> Color.Transparent
+                }
+            )
+            .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        images.forEach { image ->
-            Box(
-                modifier = Modifier
-                    .padding(end = 4.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(if (image.useAsContext) Color.DarkGray else Color.Black)
-                    .border(1.dp, Color.White, RoundedCornerShape(16.dp))
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "@${image.name}",
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        fontSize = 14.sp
-                    )
-                    IconButton(
-                        onClick = {
-                            images = images.filter { it != image }
-                        },
-                        modifier = Modifier.size(16.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Remove Image",
-                            tint = Color.Red,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
+        when (voiceState) {
+            VoiceState.LISTENING -> {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    color = Color.Red,
+                    strokeWidth = 2.dp
+                )
+                Text(
+                    text = "🎤 Listening... Speak now",
+                    color = Color.Red,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
             }
+            VoiceState.PROCESSING -> {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    color = Color.Yellow,
+                    strokeWidth = 2.dp
+                )
+                Text(
+                    text = "🔄 Processing speech...",
+                    color = Color.Yellow,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+            VoiceState.ERROR -> {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Voice Error",
+                    tint = Color.Red,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = "❌ Voice recognition error. Tap to retry.",
+                    color = Color.Red,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+            else -> {}
         }
     }
 }
 
+// Voice recognition helper function
+fun startVoiceRecognition(
+    context: android.content.Context,
+    onStateChange: (VoiceState) -> Unit,
+    onTextResult: (String) -> Unit,
+    onSpeechRecognizerChange: (SpeechRecognizer?) -> Unit
+) {
+    if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+        onStateChange(VoiceState.ERROR)
+        return
+    }
+
+    val speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
+    onSpeechRecognizerChange(speechRecognizer)
+
+    val recognitionListener = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {
+            onStateChange(VoiceState.LISTENING)
+        }
+
+        override fun onBeginningOfSpeech() {
+            onStateChange(VoiceState.LISTENING)
+        }
+
+        override fun onRmsChanged(rmsdB: Float) {}
+
+        override fun onBufferReceived(buffer: ByteArray?) {}
+
+        override fun onEndOfSpeech() {
+            onStateChange(VoiceState.PROCESSING)
+        }
+
+        override fun onError(error: Int) {
+            Log.e("VoiceRecognition", "Speech recognition error: $error")
+            onStateChange(VoiceState.ERROR)
+        }
+
+        override fun onResults(results: Bundle?) {
+            val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            if (!matches.isNullOrEmpty()) {
+                onTextResult(matches[0])
+            } else {
+                onStateChange(VoiceState.ERROR)
+            }
+        }
+
+        override fun onPartialResults(partialResults: Bundle?) {
+            val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            if (!matches.isNullOrEmpty()) {
+                onTextResult(matches[0])
+            }
+        }
+
+        override fun onEvent(eventType: Int, params: Bundle?) {}
+    }
+
+    speechRecognizer.setRecognitionListener(recognitionListener)
+
+    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.getDefault())
+        putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your message...")
+        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+    }
+
+    try {
+        speechRecognizer.startListening(intent)
+        onStateChange(VoiceState.LISTENING)
+    } catch (e: Exception) {
+        Log.e("VoiceRecognition", "Error starting speech recognition", e)
+        onStateChange(VoiceState.ERROR)
+    }
+}
 
 @Composable
 fun AttachmentChipsRow(
