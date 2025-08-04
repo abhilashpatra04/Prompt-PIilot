@@ -16,7 +16,7 @@ import com.example.promptpilot.models.ChatAttachment
 import com.example.promptpilot.models.ConversationModel
 import com.example.promptpilot.models.MessageModel
 import com.example.promptpilot.models.SenderType
-import com.example.promptpilot.screens.AgentType
+import com.example.promptpilot.models.AgentType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -127,152 +127,34 @@ class ConversationViewModel @Inject constructor(
         }
     }
 
-//    suspend fun sendMessage(
-//        message: String,
-//        attachments: List<ChatAttachment>,
-//        context: android.content.Context,
-//        webSearch: Boolean = false,
-//        agentType: AgentType? = null
-//    ) {
-//        Log.d("PromptPilot", "sendMessage called with: $message, webSearch: $webSearch, agent: $agentType")
-//
-//        // Clear any previous errors
-//        _errorState.value = null
-//
-//        try {
-//            // Handle PDF uploads with timeout
-//            val pdfAttachments = attachments.filter { it.type == AttachmentType.PDF }
-//            if (pdfAttachments.isNotEmpty()) {
-//                val pdfUris = pdfAttachments.map { Uri.parse(it.url) }
-//                val uploaded = withTimeoutOrNull(OPERATION_TIMEOUT_MS) {
-//                    withContext(Dispatchers.IO) {
-//                        uploadPdfsToBackend(backendApi, _currentConversation.value, pdfUris, context)
-//                    }
-//                }
-//                if (uploaded != true) {
-//                    _errorState.value = "Failed to upload PDF files. Please try again."
-//                    return
-//                }
-//            }
-//
-//            stopReceivingResults = false
-//            if (getMessagesByConversation(_currentConversation.value).isEmpty()) {
-//                createConversationRemote(message)
-//            }
-//
-//            // Create user message
-//            val userMessageModel = MessageModel(
-//                id = UUID.randomUUID().toString(),
-//                question = message,
-//                answer = "", // User message doesn't have an answer
-//                conversationId = _currentConversation.value,
-//                text = message,
-//                sender = SenderType.USER,
-//                timestamp = System.currentTimeMillis(),
-//                attachments = attachments,
-//                model = _selectedModel.value.model
-//            )
-//
-//            // Create AI message placeholder
-//            val aiMessageModel = MessageModel(
-//                id = UUID.randomUUID().toString(),
-//                question = "", // AI message doesn't have a question
-//                answer = "Thinking...",
-//                conversationId = _currentConversation.value,
-//                text = "Thinking...",
-//                sender = SenderType.ASSISTANT,
-//                timestamp = System.currentTimeMillis() + 1, // Slightly later timestamp
-//                attachments = emptyList(),
-//                model = _selectedModel.value.model
-//            )
-//
-//            val currentListMessage: MutableList<MessageModel> =
-//                getMessagesByConversation(_currentConversation.value).toMutableList()
-//
-//            // Add user message first, then AI message - IMPORTANT: Add to the END of list (most recent)
-//            currentListMessage.add(userMessageModel)
-//            currentListMessage.add(aiMessageModel)
-//
-//            setMessages(currentListMessage)
-//            messageRepo.createMessage(userMessageModel)
-//
-//            // Trigger scroll to bottom for new messages
-//            _shouldScrollToBottom.value = true
-//
-//            _isStreaming.value = true
-//
-//            // Use timeout for streaming response
-//            val result = withTimeoutOrNull(120000L) { // 2 minute timeout for AI response
-//                withContext(Dispatchers.IO) {
-//                    openAIRepo.getStreamingAIResponse(
-//                        uid = "abhilash04",
-//                        prompt = message,
-//                        model = _selectedModel.value.model,
-//                        chatId = _currentConversation.value,
-//                        imageUrls = attachments.map { it.url }.takeIf { it.isNotEmpty() },
-//                        webSearch = webSearch,
-//                        agentType = agentType?.name
-//                    ) { streamedText ->
-//                        // Update UI on Main thread
-//                        viewModelScope.launch(Dispatchers.Main) {
-//                            updateLatestAIMessage(streamedText)
-//                        }
-//                    }
-//                }
-//            }
-//
-//            if (result != null) {
-//                // Final update with complete response
-//                updateLatestAIMessage(result)
-//                // Save the complete AI message
-//                val updatedMessages = getMessagesByConversation(_currentConversation.value)
-//                val latestAIMessage = updatedMessages.lastOrNull { it.sender == SenderType.ASSISTANT }
-//                if (latestAIMessage != null) {
-//                    messageRepo.createMessage(latestAIMessage.copy(answer = result, text = result))
-//                }
-//                Log.d("PromptPilot", "Message sent successfully")
-//            } else {
-//                // Timeout occurred
-//                val timeoutMessage = "Request timed out. Please try with a shorter message or check your connection."
-//                updateLatestAIMessage(timeoutMessage)
-//                _errorState.value = timeoutMessage
-//            }
-//
-//        } catch (e: Exception) {
-//            Log.e("PromptPilot", "Error in sendMessage", e)
-//            val errorMessage = when {
-//                e.message?.contains("timeout", ignoreCase = true) == true ->
-//                    "Request timed out. Please try again with a shorter message."
-//                e.message?.contains("network", ignoreCase = true) == true ->
-//                    "Network error. Please check your connection and try again."
-//                e.message?.contains("server", ignoreCase = true) == true ->
-//                    "Server error. Please try again later."
-//                else -> "Something went wrong. Please try again."
-//            }
-//
-//            _errorState.value = errorMessage
-//            updateLatestAIMessage("Sorry, I encountered an error. Please try again.")
-//        } finally {
-//            _isStreaming.value = false
-//        }
-//    }
-
+    // Replace your sendMessage method with this version:
     suspend fun sendMessage(
         message: String,
         attachments: List<ChatAttachment>,
         context: android.content.Context,
         webSearch: Boolean = false,
-        agentType: AgentType? = null
+        agentType: AgentType? = null  // Now using the correct import
     ) {
         Log.d("PromptPilot", "sendMessage called with: $message, webSearch: $webSearch, agent: $agentType")
+
+        // Clear any previous errors
+        _errorState.value = null
 
         val pdfAttachments = attachments.filter { it.type == AttachmentType.PDF }
         if (pdfAttachments.isNotEmpty()) {
             val pdfUris = pdfAttachments.map { Uri.parse(it.url) }
             val uploaded = withContext(Dispatchers.IO) {
-                uploadPdfsToBackend(backendApi, _currentConversation.value, pdfUris, context)
+                try {
+                    withTimeoutOrNull(30000L) { // 30 second timeout for PDF upload
+                        uploadPdfsToBackend(backendApi, _currentConversation.value, pdfUris, context)
+                    }
+                } catch (e: Exception) {
+                    Log.e("PromptPilot", "PDF upload failed", e)
+                    null
+                }
             }
-            if (!uploaded) {
+            if (uploaded != true) {
+                _errorState.value = "Failed to upload PDF files. Please try again."
                 return
             }
         }
@@ -304,36 +186,62 @@ class ConversationViewModel @Inject constructor(
         setMessages(currentListMessage)
         messageRepo.createMessage(newMessageModel)
 
+        // Trigger scroll to bottom for new messages
+        _shouldScrollToBottom.value = true
+
         try {
             _isStreaming.value = true
 
-            // Use IO dispatcher for network operations
+            // Use the interface method directly since it's now properly defined
             val aiReply = withContext(Dispatchers.IO) {
-                openAIRepo.getStreamingAIResponse(
-                    uid = "abhilash04",
-                    prompt = message,
-                    model = _selectedModel.value.model,
-                    chatId = _currentConversation.value,
-                    imageUrls = attachments.map { it.url }.takeIf { it.isNotEmpty() },
-                    webSearch = webSearch,
-                    agentType = agentType?.name
-                ) { streamedText ->
-                    // Update UI on Main thread for streaming
-                    viewModelScope.launch(Dispatchers.Main) {
-                        updateLatestMessageAnswer(streamedText)
+                withTimeoutOrNull(120000L) { // 2 minute timeout
+                    openAIRepo.getStreamingAIResponse(
+                        uid = "abhilash04",
+                        prompt = message,
+                        model = _selectedModel.value.model,
+                        chatId = _currentConversation.value,
+                        imageUrls = attachments.map { it.url }.takeIf { it.isNotEmpty() },
+                        webSearch = webSearch,
+                        agentType = agentType?.name
+                    ) { streamedText ->
+                        // Update UI on Main thread for streaming
+                        viewModelScope.launch(Dispatchers.Main) {
+                            updateLatestMessageAnswer(streamedText)
+                        }
                     }
                 }
             }
 
-            // Final update with complete response
-            updateLatestMessageAnswer(aiReply)
+            if (aiReply != null) {
+                // Final update with complete response
+                updateLatestMessageAnswer(aiReply)
+                Log.d("PromptPilot", "Message sent successfully: ${aiReply.length} characters")
+            } else {
+                // Timeout occurred
+                val timeoutMessage = "Request timed out. Please try with a shorter message or check your connection."
+                updateLatestMessageAnswer(timeoutMessage)
+                _errorState.value = timeoutMessage
+            }
+
             _isStreaming.value = false
 
         } catch (e: Exception) {
             Log.e("PromptPilot", "Error in sendMessage", e)
-            _errorState.value = "Network error: ${e.message}"
+            val errorMessage = when {
+                e.message?.contains("401", ignoreCase = true) == true ->
+                    "Authentication error. Please check your API configuration."
+                e.message?.contains("timeout", ignoreCase = true) == true ->
+                    "Request timed out. Please try again with a shorter message."
+                e.message?.contains("network", ignoreCase = true) == true ->
+                    "Network error. Please check your connection."
+                e.message?.contains("server error", ignoreCase = true) == true ->
+                    e.message ?: "Server error occurred."
+                else -> "Connection error: ${e.message ?: "Unknown error"}. Please try again."
+            }
+
+            _errorState.value = errorMessage
             _isStreaming.value = false
-            updateLatestMessageAnswer("Sorry, I encountered an error. Please try again. Error: ${e.message}")
+            updateLatestMessageAnswer("Sorry, I encountered an error: $errorMessage")
         }
     }
 

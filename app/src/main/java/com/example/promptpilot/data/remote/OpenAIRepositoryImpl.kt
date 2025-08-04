@@ -74,14 +74,14 @@ class OpenAIRepositoryImpl @Inject constructor(
         }
     }
 
-    suspend fun getStreamingAIResponse(
+    override suspend fun getStreamingAIResponse(
         uid: String,
         prompt: String,
         model: String,
         chatId: String?,
-        imageUrls: List<String>? = null,
-        webSearch: Boolean = false,
-        agentType: String? = null,
+        imageUrls: List<String>?,
+        webSearch: Boolean,
+        agentType: String?,
         onChunkReceived: (String) -> Unit
     ): String = withContext(Dispatchers.IO) {
         Log.d("PromptPilot", "getStreamingAIResponse called with: $prompt, webSearch: $webSearch, agent: $agentType")
@@ -115,6 +115,7 @@ class OpenAIRepositoryImpl @Inject constructor(
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Accept", "text/plain")
                 .addHeader("Cache-Control", "no-cache")
+                .addHeader("User-Agent", "PromptPilot-Android/1.0")
                 .build()
 
             // Create a client with longer timeouts for streaming
@@ -126,26 +127,42 @@ class OpenAIRepositoryImpl @Inject constructor(
 
             val response = streamingClient.newCall(request).execute()
 
+            // Enhanced logging for debugging
+            Log.d("PromptPilot", "Response Code: ${response.code}")
+            Log.d("PromptPilot", "Response Message: ${response.message}")
+            Log.d("PromptPilot", "Response Headers: ${response.headers}")
+            Log.d("PromptPilot", "Response Protocol: ${response.protocol}")
+
             if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: "Unknown error"
+                val errorBody = response.body.string()
                 Log.e("PromptPilot", "HTTP Error ${response.code}: $errorBody")
+                Log.e("PromptPilot", "Full response details: Code=${response.code}, Message=${response.message}, Protocol=${response.protocol}")
+
                 val errorMessage = when (response.code) {
+                    401 -> "Authentication error. Server returned 401. Check API configuration."
+                    403 -> "Forbidden. Please check your permissions."
+                    404 -> "Endpoint not found. Please check your server URL: $BASE_URL"
+                    405 -> "Method not allowed. Server may not support POST method."
                     500 -> "Server error. Please try again."
                     503 -> "Service temporarily unavailable. Please try again later."
-                    else -> "Connection error (${response.code}). Please try again."
+                    else -> "Connection error (${response.code}: ${response.message}). Please try again."
                 }
                 throw Exception(errorMessage)
             }
 
-            val responseBody = response.body ?: throw Exception("Empty response body")
+            val responseBody = response.body
             val reader = BufferedReader(InputStreamReader(responseBody.byteStream()))
 
             var fullResponse = ""
             var line: String?
             var lastUpdateTime = System.currentTimeMillis()
+            var lineCount = 0
 
             try {
                 while (reader.readLine().also { line = it } != null) {
+                    lineCount++
+                    Log.d("PromptPilot", "Received line $lineCount: $line") // Debug each line
+
                     val currentTime = System.currentTimeMillis()
 
                     // Check for timeout during streaming
@@ -154,44 +171,74 @@ class OpenAIRepositoryImpl @Inject constructor(
                         break
                     }
 
-                    if (line!!.startsWith("data: ")) {
-                        val jsonStr = line!!.substring(6).trim() // Remove "data: " prefix
+                    // Handle different line formats
+                    when {
+                        line!!.startsWith("data: ") -> {
+                            val jsonStr = line.substring(6).trim()
+                            Log.d("PromptPilot", "Processing JSON: $jsonStr")
 
-                        if (jsonStr == "[DONE]" || jsonStr.isEmpty()) {
-                            Log.d("PromptPilot", "Streaming completed normally")
-                            break
-                        }
+                            if (jsonStr == "[DONE]" || jsonStr.isEmpty()) {
+                                Log.d("PromptPilot", "Streaming completed normally")
+                                break
+                            }
 
-                        try {
-                            val jsonData = JSONObject(jsonStr)
+                            try {
+                                val jsonData = JSONObject(jsonStr)
+                                Log.d("PromptPilot", "Parsed JSON keys: ${jsonData.keys().asSequence().toList()}")
 
-                            when {
-                                jsonData.has("chunk") -> {
-                                    val chunk = jsonData.getString("chunk")
-                                    if (chunk.isNotEmpty()) {
-                                        fullResponse += chunk
-                                        onChunkReceived(fullResponse)
-                                        lastUpdateTime = currentTime
+                                when {
+                                    jsonData.has("chunk") -> {
+                                        val chunk = jsonData.getString("chunk")
+                                        if (chunk.isNotEmpty()) {
+                                            fullResponse += chunk
+                                            onChunkReceived(fullResponse)
+                                            lastUpdateTime = currentTime
+                                            Log.d("PromptPilot", "Added chunk, total length: ${fullResponse.length}")
+                                        }
+                                    }
+                                    jsonData.has("done") && jsonData.getBoolean("done") -> {
+                                        Log.d("PromptPilot", "Received done signal")
+                                        break
+                                    }
+                                    jsonData.has("error") -> {
+                                        val error = jsonData.getString("error")
+                                        Log.e("PromptPilot", "Server error: $error")
+                                        throw Exception("Server error: $error")
+                                    }
+                                    jsonData.has("reply") -> {
+                                        val reply = jsonData.getString("reply")
+                                        if (reply.isNotEmpty()) {
+                                            fullResponse = reply // For non-streaming responses
+                                            onChunkReceived(fullResponse)
+                                            lastUpdateTime = currentTime
+                                            Log.d("PromptPilot", "Received full reply: ${reply.length} chars")
+                                        }
+                                    }
+                                    else -> {
+                                        Log.w("PromptPilot", "Unknown JSON format: $jsonStr")
                                     }
                                 }
-                                jsonData.has("done") && jsonData.getBoolean("done") -> {
-                                    Log.d("PromptPilot", "Received done signal")
-                                    break
-                                }
-                                jsonData.has("error") -> {
-                                    val error = jsonData.getString("error")
-                                    Log.e("PromptPilot", "Server error: $error")
-                                    throw Exception("Server error: $error")
+                            } catch (jsonException: Exception) {
+                                Log.e("PromptPilot", "JSON parsing error for line: $jsonStr", jsonException)
+                                // Try to handle as plain text
+                                if (jsonStr.isNotEmpty() && !jsonStr.startsWith("{")) {
+                                    fullResponse += jsonStr
+                                    onChunkReceived(fullResponse)
+                                    lastUpdateTime = currentTime
                                 }
                             }
-                        } catch (e: Exception) {
-                            Log.w("PromptPilot", "Error parsing streaming response line: $jsonStr", e)
-                            // Continue reading instead of failing completely
-                            continue
+                        }
+                        line.isNotEmpty() -> {
+                            Log.d("PromptPilot", "Non-SSE line: $line")
+                            // Handle non-SSE format responses
+                            fullResponse += line + "\n"
+                            onChunkReceived(fullResponse)
+                            lastUpdateTime = currentTime
                         }
                     }
                 }
             } finally {
+                Log.d("PromptPilot", "Streaming finished. Total lines: $lineCount, Response length: ${fullResponse.length}")
                 try {
                     reader.close()
                     response.close()
@@ -211,6 +258,8 @@ class OpenAIRepositoryImpl @Inject constructor(
         } catch (e: Exception) {
             Log.e("PromptPilot", "Error in streaming response", e)
             val errorMessage = when {
+                e.message?.contains("401", ignoreCase = true) == true ->
+                    "Authentication error. Please check your API configuration."
                 e.message?.contains("timeout", ignoreCase = true) == true ->
                     "Response timed out. Please try with a shorter message."
                 e.message?.contains("network", ignoreCase = true) == true ->

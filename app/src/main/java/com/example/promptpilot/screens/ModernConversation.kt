@@ -75,8 +75,8 @@ fun ModernConversation(
 
     val context = LocalContext.current
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
-    var isTtsEnabled by remember { mutableStateOf(true) }
-//    val isTtsEnabled by conversationViewModel.isTtsEnabled.collectAsState()
+    val isTtsEnabled by conversationViewModel.isTtsEnabled.collectAsState()
+
     // Initialize TTS
     LaunchedEffect(Unit) {
         tts = TextToSpeech(context) { status ->
@@ -89,6 +89,7 @@ fun ModernConversation(
     // Cleanup TTS
     DisposableEffect(Unit) {
         onDispose {
+            tts?.stop()
             tts?.shutdown()
         }
     }
@@ -104,6 +105,14 @@ fun ModernConversation(
             }
         }
     }
+
+    // Stop TTS when toggled off
+    LaunchedEffect(isTtsEnabled) {
+        if (!isTtsEnabled) {
+            tts?.stop()
+        }
+    }
+
     // State for scrolling the message list
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
